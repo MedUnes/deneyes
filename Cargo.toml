@@ -1,0 +1,15 @@
+[package]
+name = "dneyes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = {version = "0.4.38", features = ["serde"]}
+domain = { version = "0.11.0", features = ["resolv"] }
+
+reqwest = { version = "0.12.8", features = ["json"] }
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+tokio = { version = "1", features = ["full", "macros"] }
+clap = { version = "4.5.27", features = ["derive"] }
+config = "0.15.11"
