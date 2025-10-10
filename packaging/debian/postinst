@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+if ! getent group dneyes >/dev/null; then
+    groupadd --system dneyes
+fi
+
+if ! id -u dneyes >/dev/null 2>&1; then
+    useradd --system --gid dneyes --home /var/lib/dneyes --shell /usr/sbin/nologin dneyes
+fi
+
+install -d -o dneyes -g dneyes /var/lib/dneyes
+chown -R dneyes:dneyes /etc/dneyes
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    systemctl enable dneyes.service || true
+    systemctl restart dneyes.service || true
+fi
+
+exit 0

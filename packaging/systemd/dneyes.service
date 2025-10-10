@@ -1,0 +1,15 @@
+[Unit]
+Description=DNeyeS DNS and HTTP monitoring service
+After=network.target
+
+[Service]
+Type=simple
+User=dneyes
+Group=dneyes
+Environment=RUST_LOG=info
+ExecStart=/usr/bin/dneyes dns --config /etc/dneyes/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

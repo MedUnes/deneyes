@@ -1,45 +1,49 @@
-use crate::errors::DneyesError;
 use clap::Parser;
-use cli::*;
-use std::collections::HashMap;
-use serde::Deserialize;
+
+use crate::cli::{Cli, Command};
+use crate::config::AppConfig;
+use crate::errors::DneyesError;
+use crate::telemetry::clickhouse::ClickhouseContext;
+use crate::telemetry::sink;
 
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod dns;
 pub mod errors;
 pub mod http;
+pub mod telemetry;
 pub mod utils;
-#[derive(Debug,Deserialize)]
-struct DNeyeSDnsConfig {
-    pub server_list_url: String,
-    pub country_list: HashMap<String, String>,
-}
-#[derive(Debug,Deserialize)]
-struct DNeyeSConfig {
-    dns: DNeyeSDnsConfig,
-}
+
 #[tokio::main]
 async fn main() -> Result<(), DneyesError> {
-    let mode = Cli::parse().mode;
-    let settings = config::Config::builder()
-        .add_source(config::File::with_name("config.yaml"))
-        .build()
-        .unwrap();
-   let cfg =  settings
-            .try_deserialize::<DNeyeSConfig>()
-            .expect("failed to read DNeyeSConfig from config");
-    println!("{:#?}", cfg.dns.country_list.get("de").expect("Unknown country"));
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_target(false)
+        .init();
 
-    println!("Starting with mode: {:?}\n", mode);
-    println!("Starting DNeyeS in {:?} mode", mode);
-    match mode {
-        Mode::Http => {
-            commands::http::run().await?;
+    let cli = Cli::parse();
+    let config = AppConfig::load(&cli.config)?;
+
+    match cli.command {
+        Command::Dns => {
+            let sinks = sink::build_sinks(&config.output).await?;
+            commands::dns::run(&config, sinks.dns).await?;
         }
-        Mode::Dns => {
-            commands::dns::run().await?;
+        Command::Http => {
+            let sinks = sink::build_sinks(&config.output).await?;
+            commands::http::run(sinks.http).await?;
+        }
+        Command::Api => {
+            let clickhouse_cfg = config.output.clickhouse.clone().ok_or_else(|| {
+                DneyesError::Config(
+                    "ClickHouse configuration is required to run the API server".to_string(),
+                )
+            })?;
+            let context = ClickhouseContext::new(&clickhouse_cfg).await?;
+            commands::api::run(&config, context).await?;
         }
     }
+
     Ok(())
 }

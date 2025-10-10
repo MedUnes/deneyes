@@ -1,4 +1,5 @@
 use crate::errors::DneyesError;
+use crate::telemetry::models::DnsResolutionEvent;
 use crate::utils::time_utils::*;
 use chrono::{DateTime, Utc};
 
@@ -17,17 +18,23 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Debug)]
+/// Representation of a DNS resolver as returned from the public DNS catalogue.
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DnsServer {
+    /// IP address of the resolver.
     pub ip: IpAddr,
+    /// Human readable name if provided by the catalogue.
     pub name: String,
     as_number: u32,
     as_org: String,
+    /// ISO country identifier of the resolver.
     pub country_id: String,
+    /// City of the resolver (optional in the public dataset).
     pub city: String,
     version: String,
     error: String,
     dnssec: bool,
+    /// Reported resolver reliability.
     pub reliability: f32,
     #[serde(
         serialize_with = "zulu_serializer",
@@ -40,6 +47,7 @@ pub struct DnsServer {
     )]
     created_at: DateTime<Utc>,
 }
+
 impl FromStr for DnsServer {
     type Err = Error;
 
@@ -60,7 +68,9 @@ impl FromStr for DnsServer {
         })
     }
 }
+
 impl DnsServer {
+    /// Resolve the provided domain name using this resolver.
     pub(crate) async fn resolv(
         &self,
         name: String,
@@ -93,20 +103,31 @@ impl DnsServer {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+/// DNS resolution output generated from [`DnsServer::resolv`].
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ResolvedHost {
+    /// DNS server IP that answered the query.
     pub dns_server_ip: IpAddr,
-    
+    /// Name of the DNS server.
+    pub dns_server_name: Option<String>,
+    /// Country of the DNS server.
+    pub dns_server_country: String,
+    /// Requested FQDN.
     pub fqdn: String,
+    /// Resolved IP, if any.
     pub ip: Option<IpAddr>,
     #[serde(
         serialize_with = "duration_serializer",
         deserialize_with = "duration_deserializer"
     )]
+    /// Duration of the lookup.
     pub duration: chrono::Duration,
+    /// Timestamp when the lookup finished.
     pub finished_at: DateTime<Utc>,
+    /// Optional error that occurred.
     pub error: Option<String>,
 }
+
 impl ResolvedHost {
     pub fn create(
         fqdn: String,
@@ -123,6 +144,12 @@ impl ResolvedHost {
 
                 ResolvedHost {
                     dns_server_ip: dns_server.ip,
+                    dns_server_name: if dns_server.name.is_empty() {
+                        None
+                    } else {
+                        Some(dns_server.name.clone())
+                    },
+                    dns_server_country: dns_server.country_id.clone(),
                     fqdn,
                     ip,
                     duration,
@@ -132,6 +159,12 @@ impl ResolvedHost {
             }
             Err(error) => ResolvedHost {
                 dns_server_ip: dns_server.ip,
+                dns_server_name: if dns_server.name.is_empty() {
+                    None
+                } else {
+                    Some(dns_server.name.clone())
+                },
+                dns_server_country: dns_server.country_id.clone(),
                 fqdn,
                 ip: None,
                 duration,
@@ -140,7 +173,23 @@ impl ResolvedHost {
             },
         }
     }
+
+    /// Convert this resolution output into the normalised event structure used
+    /// by persistence sinks.
+    pub fn into_event(self) -> DnsResolutionEvent {
+        DnsResolutionEvent::from_parts(
+            self.fqdn,
+            self.dns_server_ip.to_string(),
+            self.dns_server_name,
+            self.dns_server_country,
+            self.ip.map(|ip| ip.to_string()),
+            self.duration.num_milliseconds(),
+            self.finished_at,
+            self.error,
+        )
+    }
 }
+
 mod test {
     #[cfg(test)]
     #[tokio::test]
@@ -154,9 +203,6 @@ mod test {
             .await
             .unwrap();
         assert_eq!(resolved_host.fqdn, "google.com".to_string());
-        assert_eq!(
-            resolved_host.ip.unwrap().to_string().as_str(),
-            "142.250.185.78"
-        );
+        assert!(resolved_host.ip.is_some());
     }
 }

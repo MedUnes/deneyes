@@ -1,51 +1,44 @@
-use crate::errors::DneyesError;
-use crate::http::http_site_status;
-use crate::utils::file_utils::{StatusFile, StatusFileType};
 use std::fs;
+use std::sync::Arc;
+
 use tokio::task::JoinSet;
 
-pub(crate) async fn run() -> Result<(), DneyesError> {
-    let file_contents = fs::read_to_string("sites.txt");
-    let sites: Vec<String> = file_contents
-        .expect("error")
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
-    let mut status_file_http = StatusFile::create(StatusFileType::HTTP).await;
+use crate::errors::DneyesError;
+use crate::http::http_site_status;
+use crate::telemetry::models::HttpAvailabilityEvent;
+use crate::telemetry::sink::HttpSink;
+
+/// Execute the HTTP monitoring workflow.
+pub(crate) async fn run(sink: Arc<dyn HttpSink>) -> Result<(), DneyesError> {
+    let file_contents = fs::read_to_string("sites.txt")?;
+    let sites: Vec<String> = file_contents.lines().map(|line| line.to_string()).collect();
     let mut https_futures = JoinSet::new();
 
     for site in &sites {
         let site_clone = format!("https://{}", site.clone());
-        let https_fut = async move {
-            let http_site_status = http_site_status::check(site_clone.clone()).await;
-            (site_clone, http_site_status)
-        };
-        https_futures.spawn(https_fut);
+        let sink = sink.clone();
+        https_futures.spawn(async move {
+            let event: HttpAvailabilityEvent = http_site_status::check(site_clone.clone()).await;
+            (site_clone, event, sink)
+        });
+    }
 
-        while let Some(result) = https_futures.join_next().await {
-            match result {
-                Ok((site, http_site_status)) => {
-                    let success = !http_site_status.error.is_some();
-                    let status_icon = if success { "✅" } else { "✖" };
-                    eprint!(
-                        "{} Responded successfully: {} ...... ({} ms)\n",
-                        site,
-                        status_icon,
-                        http_site_status.duration.num_milliseconds(),
-                    );
-                    status_file_http
-                        .write(
-                            serde_json::to_string(&http_site_status)
-                                .map_err(|e| DneyesError::Serialization(e))?
-                                .as_bytes(),
-                        )
-                        .await;
-                }
-                Err(e) => {
-                    eprintln!("Error checking status {}", e);
-                }
+    while let Some(result) = https_futures.join_next().await {
+        match result {
+            Ok((site, event, sink)) => {
+                let success = event.error.is_none();
+                let status_icon = if success { "✅" } else { "✖" };
+                eprintln!(
+                    "{} Responded successfully: {} ...... ({} ms)",
+                    site, status_icon, event.duration_ms,
+                );
+                sink.write(&event).await?;
+            }
+            Err(e) => {
+                tracing::error!("Error checking HTTP status: {}", e);
             }
         }
     }
+
     Ok(())
 }

@@ -1,0 +1,32 @@
+---
+dns:
+  server_list_url: https://public-dns.info/nameserver
+  default_countries:
+    - de
+    - us
+  timeout_secs: 5
+  concurrency: 64
+  country_list:
+    de: Germany
+    us: United States
+    gb: United Kingdom
+output:
+  mode: clickhouse
+  file:
+    directory: /var/lib/dneyes/export
+  clickhouse:
+    url: http://localhost:8123
+    database: dneyes
+    username: default
+    password: ""
+    dns_table: dns_resolutions
+    http_table: http_availability
+    ensure_schema: true
+    timeout_secs: 10
+api:
+  host: 0.0.0.0
+  port: 8080
+  page_size: 200
+  cors:
+    allow_origins:
+      - http://localhost:5173
